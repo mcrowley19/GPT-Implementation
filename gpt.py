@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import gpt3_tokenizer
 from datasets import load_dataset
 import einops
 from huggingface_hub import hf_hub_download
@@ -108,7 +107,10 @@ class Model(torch.nn.Module):
         self.b_u = torch.nn.Parameter(torch.zeros(self.cfg.block_size))
 
     def embed(self, tokens):
+        # B: The weight matrix is shape vocab_len x d_model of random numbers (Which are then tweaked through back prop). 
+        # By indexing this with our tokens, we are picking out the rows that correspond to the tokens we have. This forms a (batch x block_size x d_model matrix)
         emb = self.W_e[tokens] + self.b_e
+
         pos = torch.arange(tokens.shape[1])
         pos_emb = self.W_pos[pos]
         return emb + pos_emb
@@ -120,11 +122,18 @@ class Model(torch.nn.Module):
         resid = self.embed(x)
         for tb in self.stack:
             resid += (resid)
-        
+
         layer_norm = torch.nn.LayerNorm(self.cfg.block_size)
         resid_norm = layer_norm(resid)
-        logits = einops.einsum(self.W_u, resid_norm, 'vocab d_model, batch embedding d_model  -> batch vocab embedding') + self.b_u
-        return logits
+
+        # C: Our resid maintains the same shape as it originally did after we embedded it in Model.embed(), we now have to compress it back down to the shape tokens used to be
+        logits = einops.einsum(self.W_u, resid_norm, 'vocab d_model, batch block_size d_model  -> batch block_size') + self.b_u
+
+        #D: Each logit corresponds to a token. Here I will greedily just take the highest value logit and return it for each
+        softmax = torch.nn.Softmax(dim=-1)
+        logits = softmax(logits)
+        logit_indices = torch.argmax(logits, dim=-1)
+        return logit_indices
 
         
 
@@ -152,6 +161,7 @@ batch_size = 16
 tokens = np.memmap('train.bin', dtype=np.uint16, mode="r")
 tokens = torch.from_numpy(tokens.astype(np.int64))
 
+# A: We start by selecting batch_size batches of block_size tokens. We then stack these into a matrix (Forming a batch_size x block_size matrix)
 ix = torch.randint(0, len(tokens) - block_size, (batch_size,))
 x = torch.stack([tokens[i:i+block_size] for i in ix])
 y = torch.stack([tokens[i+1:i+block_size+1] for i in ix])
@@ -159,12 +169,20 @@ y = torch.stack([tokens[i+1:i+block_size+1] for i in ix])
 cfg = Config()
 model = Model(cfg)
 
-print(model.forward(x,y))
+out = model(x,y)
+
+import json
+with open('vocab.json','r') as f:
+    data = f.read()
+    data = json.loads(data)
+
+for token in out:
+    print(data[token])
+#for token in out:
+    #print(data[token])
 
 
 
-
-# x is (16x512) where we have context length of 16 tokens and 512 batches
 
 
 
