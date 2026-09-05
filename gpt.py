@@ -17,7 +17,7 @@ class Config:
         self.d_model = self.nheads * self.d_heads
         self.vocab = 8562
         self.nlayers = 6
-        self.train_steps = 10000
+        self.train_steps = 1000
     
 class Head(torch.nn.Module):
     def __init__(self, cfg):
@@ -38,11 +38,14 @@ class Head(torch.nn.Module):
         The key, query and value matrices are of shape (d_model, d_head) and they project the tokens to the d_heads number of dimensions.
         This means that the output of the attention head is of shape (batch, block_size, dhead)
         '''
+        
         keys = einops.einsum(self.W_K, tokens, 'modeldim dhead, batch tokens embedding -> batch tokens dhead') + self.b_k
         queries = einops.einsum(self.W_Q, tokens, 'modeldim dhead, batch tokens embedding -> batch tokens dhead') + self.b_q
+       
         kq = (keys @ queries.swapdims(-1,-2)) / self.cfg.d_heads**0.5
         masked_kq = self.mask(kq)
         values = einops.einsum(self.W_V, tokens,'modeldim dhead, batch tokens embedding -> batch tokens dhead') + self.b_v
+
         out = masked_kq @ values
         return out
     
@@ -59,15 +62,16 @@ class MultiHeadAttention(torch.nn.Module):
         super().__init__()
         self.stack = torch.nn.ModuleList([Head(cfg) for head in range(cfg.nheads)]) 
         self.cfg = cfg
-        self.layer_norm = torch.nn.LayerNorm(cfg.block_size,device=cfg.device )
+        self.layer_norm = torch.nn.LayerNorm(cfg.d_model,device=cfg.device )
+        self.W_O = torch.nn.Parameter(torch.rand(cfg.block_size, cfg.d_model) * 0.02)
     def forward(self,resid):
         outputs = []
         for head in self.stack:
             outputs.append(head(self.layer_norm(resid)))
 
+       
         out = torch.cat(outputs, -1)
-
-
+        out = out @ self.W_O
         return out
     
 class MLP(torch.nn.Module):
@@ -76,16 +80,17 @@ class MLP(torch.nn.Module):
         self.W_e = torch.nn.Parameter(torch.rand(cfg.block_size, 4 * cfg.d_model))
         self.W_u = torch.nn.Parameter(torch.rand(cfg.block_size, cfg.d_model))
         self.cfg = cfg
-        self.layer_norm = torch.nn.LayerNorm(self.cfg.block_size, device=cfg.device)
+        self.layer_norm = torch.nn.LayerNorm(self.cfg.d_model, device=cfg.device)
         self.gelu = torch.nn.GELU()
 
     def forward(self,resid):
         resid_norm = self.layer_norm(resid)
         emb = einops.einsum(self.W_e, resid_norm, 'embedding d_mlp, batch d_model embedding -> batch embedding d_mlp')
+        # now we convert x to have dimensions batch embedding d_mlp
         activation = self.gelu(emb)
         unemb =  einops.einsum(self.W_u, activation,  'embedding d_model, batch embedding d_mlp -> batch embedding d_model')
-        return unemb + resid
-
+         
+        return unemb
 
 class TransformerBlock(torch.nn.Module):
     def __init__(self, cfg):
@@ -94,11 +99,9 @@ class TransformerBlock(torch.nn.Module):
         self.mlp = MLP(cfg)
 
     def forward(self,resid):
-        resid = self.mha(resid)
-        resid = self.mlp(resid)
+        resid = resid + self.mha(resid)
+        resid = resid + self.mlp(resid)
         return resid
-
-
 
 class Model(torch.nn.Module):
     def __init__(self, cfg):
@@ -111,13 +114,14 @@ class Model(torch.nn.Module):
         self.stack = torch.nn.ModuleList([TransformerBlock(cfg) for block in range(cfg.nlayers)]) 
         self.W_u = torch.nn.Parameter(torch.rand(self.cfg.vocab, self.cfg.d_model) * 0.02)
         self.b_u = torch.nn.Parameter(torch.zeros(self.cfg.vocab))
-        self.layer_norm = torch.nn.LayerNorm(self.cfg.block_size, device=cfg.device)
+        self.layer_norm = torch.nn.LayerNorm(self.cfg.d_model, device=cfg.device)
         self.softmax = torch.nn.Softmax(dim=-1)
     def embed(self, tokens):
         # B: The weight matrix is shape vocab_len x d_model of random numbers (Which are then tweaked through back prop). 
         # By indexing this with our tokens, we are picking out the rows that correspond to the tokens we have. This forms a (batch x block_size x d_model matrix)
 
         emb = self.W_e[tokens] + self.b_e
+       
         pos = torch.arange(tokens.shape[1], device=self.cfg.device)
         pos_emb = self.W_pos[pos]
         return emb + pos_emb
@@ -126,54 +130,44 @@ class Model(torch.nn.Module):
         return self.M_u[tokens] + self.b_u
 
     def forward(self, x):
-   
         resid = self.embed(x)
         for tb in self.stack:
-            resid = resid + tb(resid)
+            resid = tb(resid)
 
         resid_norm = self.layer_norm(resid)
         # C: Our resid maintains the same shape as it originally did after we embedded it in Model.embed()
         # We now have to matrix multiply so that we have a logit for each token, for each element in the block, for each batch
+
+        # Now we convert x to be of size batch number, items in each batch, tokens in vocabularly so we can get our tokens
         logits = einops.einsum(self.W_u, resid_norm, 'vocab d_model, batch block_size d_model  -> batch block_size vocab') + self.b_u
         #D: Each logit corresponds to a token. Here I will greedily just take the highest value logit and return it for each
-        logits = self.softmax(logits)
+        #logits = self.softmax(logits)
         #logit_indices = torch.argmax(logits, dim=-1)
         #return logit_indices
         return logits
 
     def train_time(self, x, y):
-        optimiser = torch.optim.AdamW(self.parameters(), lr= 6e-4)
+        optimiser = torch.optim.AdamW(self.parameters(), lr= 1e-4)
         loss_func = torch.nn.CrossEntropyLoss()
         for step in tqdm(range(self.cfg.train_steps)):
             logits = self(x)
-
-
             optimiser.zero_grad()
             loss = loss_func(
                 logits.reshape(-1, self.cfg.vocab),
                 y.reshape(-1).long()
             )
 
-            if step % 100 == 0:
+            if step % 10 == 0:
                 print(f"Step {step} Loss: {loss.item()}")
             loss.backward()
-            for name, p in model.named_parameters():
-                if p.grad is not None:
-                    print(name, p.grad.abs().mean().item())
-                    break
             optimiser.step()
             
-
             '''
             print("Post Forward: ",t1 - start)
             print("Post Loss: ",t2 - start)
             print("Post Backward: ",t3 - start)
             print("Post optimiser",t4 - start)
             '''
-           
-            
-
-
 
         print(loss.item())
 
@@ -198,20 +192,18 @@ tokens = gpt3_tokenizer.encode(data)
 '''
 
 
+cfg = Config()
 
-block_size = 512
-batch_size = 16
 tokens = np.memmap('train.bin', dtype=np.uint16, mode="r")
 tokens = torch.from_numpy(tokens.astype(np.int64))
 
 # A: We start by selecting batch_size batches of block_size tokens. We then stack these into a matrix (Forming a batch_size x block_size matrix)
-ix = torch.randint(0, len(tokens) - block_size, (batch_size,))
-x = torch.stack([tokens[i:i+block_size] for i in ix])
-y = torch.stack([tokens[i+1:i+block_size+1] for i in ix])
+ix = torch.randint(0, len(tokens) - cfg.block_size, (cfg.batch_size,))
+x = torch.stack([tokens[i:i+cfg.block_size] for i in ix])
+y = torch.stack([tokens[i+1:i+cfg.block_size+1] for i in ix])
 
-cfg = Config()
+
 model = Model(cfg).to(cfg.device)
-print(next(model.parameters()).device)
 model.train_time(x.to(cfg.device),y.to(cfg.device))
 
 '''
