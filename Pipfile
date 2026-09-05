@@ -9,6 +9,7 @@ numpy = "*"
 gpt3-tokenizer = "*"
 datasets = "*"
 einops = "*"
+tqdm = "*"
 
 [dev-packages]
 
