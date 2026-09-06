@@ -77,8 +77,8 @@ class MultiHeadAttention(torch.nn.Module):
 class MLP(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.W_e = torch.nn.Parameter(torch.rand(cfg.block_size, 4 * cfg.d_model))
-        self.W_u = torch.nn.Parameter(torch.rand(cfg.block_size, cfg.d_model))
+        self.W_e = torch.nn.Parameter(torch.rand(cfg.d_model, 4 * cfg.d_model))
+        self.W_u = torch.nn.Parameter(torch.rand(4 * cfg.d_model, cfg.d_model))
         self.cfg = cfg
         self.layer_norm = torch.nn.LayerNorm(self.cfg.d_model, device=cfg.device)
         self.gelu = torch.nn.GELU()

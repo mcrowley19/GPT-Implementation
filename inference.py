@@ -21,26 +21,6 @@ token_tensor = torch.cat(tokens,dim=0)
 softmax = torch.nn.Softmax(dim=-1)
 for iteration in range(context - len(input_str)):
     logits = model(token_tensor.unsqueeze(0).to(cfg.device))
-    
-    target = torch.tensor([data.index("a")], device=cfg.device)
-
-    loss = torch.nn.functional.cross_entropy(
-        logits[0, -1].unsqueeze(0),
-        target
-    )
-
-    probs = torch.softmax(logits[0, -1], dim=-1)
-
-    print("loss for actual 'a':", loss.item())
-    print("P(a):", probs[target].item())
-    print("P(newline):", probs[data.index("\n")].item())
-
-
-
-
-
-
-    
     logits = softmax(logits)
     logit_indices = torch.argmax(logits[0, -1])
     token_tensor = torch.cat([token_tensor, torch.tensor([logit_indices])], dim=-1)
