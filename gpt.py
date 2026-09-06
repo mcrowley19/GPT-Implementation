@@ -17,7 +17,7 @@ class Config:
         self.d_model = self.nheads * self.d_heads
         self.vocab = 8562
         self.nlayers = 6
-        self.train_steps = 1000
+        self.train_steps = 5000
     
 class Head(torch.nn.Module):
     def __init__(self, cfg):
@@ -26,7 +26,7 @@ class Head(torch.nn.Module):
         self.W_pos = torch.nn.Parameter(torch.rand(cfg.block_size, cfg.d_model) * 0.02)
         self.W_Q = torch.nn.Parameter(torch.rand(cfg.d_model, cfg.d_heads) * 0.02)
         self.W_K = torch.nn.Parameter(torch.rand(cfg.d_model, cfg.d_heads) * 0.02)
-        self.W_V = torch.nn.Parameter(torch.rand(cfg.vocab, cfg.d_heads) * 0.02)
+        self.W_V = torch.nn.Parameter(torch.rand(cfg.d_model, cfg.d_heads) * 0.02)
         self.b_q = torch.nn.Parameter(torch.zeros(cfg.d_heads))
         self.b_v = torch.nn.Parameter(torch.zeros(cfg.d_heads))
         self.b_k = torch.nn.Parameter(torch.zeros(cfg.d_heads))
@@ -50,7 +50,7 @@ class Head(torch.nn.Module):
         return out
     
     def mask(self, scores):
-        mask = torch.triu(torch.ones(scores.shape[-1], scores.shape[-2], device=cfg.device), diagonal = 1)
+        mask = torch.triu(torch.ones(scores.shape[-1], scores.shape[-2], device=self.cfg.device), diagonal = 1)
         mask = mask.masked_fill(mask == 1, float('-inf'))
         res = scores + mask
         res = self.softmax(res)
@@ -85,10 +85,10 @@ class MLP(torch.nn.Module):
 
     def forward(self,resid):
         resid_norm = self.layer_norm(resid)
-        emb = einops.einsum(self.W_e, resid_norm, 'embedding d_mlp, batch d_model embedding -> batch embedding d_mlp')
+        emb = einops.einsum(self.W_e, resid_norm, 'context d_mlp, batch tok_len d_model-> batch tok_len d_mlp')
         # now we convert x to have dimensions batch embedding d_mlp
         activation = self.gelu(emb)
-        unemb =  einops.einsum(self.W_u, activation,  'embedding d_model, batch embedding d_mlp -> batch embedding d_model')
+        unemb =  einops.einsum(self.W_u, activation,  'embedding d_model, batch tok_len d_mlp -> batch tok_len d_model')
          
         return unemb
 
@@ -109,8 +109,8 @@ class Model(torch.nn.Module):
         self.cfg = cfg
         # I assume I can have W_e and W_u with the same dims because I heard that some papers used to use the same matrix for both
         self.W_e = torch.nn.Parameter(torch.rand(self.cfg.vocab, self.cfg.d_model) * 0.02)
-        self.W_pos = torch.nn.Parameter(torch.rand(self.cfg.vocab, self.cfg.d_model) * 0.02)
-        self.b_e = torch.nn.Parameter(torch.zeros(self.cfg.block_size))
+        self.W_pos = torch.nn.Parameter(torch.rand(self.cfg.block_size, self.cfg.d_model) * 0.02)
+        self.b_e = torch.nn.Parameter(torch.zeros(self.cfg.d_model))
         self.stack = torch.nn.ModuleList([TransformerBlock(cfg) for block in range(cfg.nlayers)]) 
         self.W_u = torch.nn.Parameter(torch.rand(self.cfg.vocab, self.cfg.d_model) * 0.02)
         self.b_u = torch.nn.Parameter(torch.zeros(self.cfg.vocab))
@@ -146,10 +146,15 @@ class Model(torch.nn.Module):
         #return logit_indices
         return logits
 
-    def train_time(self, x, y):
+    def train_time(self, tokens):
         optimiser = torch.optim.AdamW(self.parameters(), lr= 1e-4)
         loss_func = torch.nn.CrossEntropyLoss()
         for step in tqdm(range(self.cfg.train_steps)):
+            ix = torch.randint(0, len(tokens) - self.cfg.block_size, (self.cfg.batch_size,))
+            x = torch.stack([tokens[i:i+self.cfg.block_size] for i in ix]).to(self.cfg.device)
+            y = torch.stack([tokens[i+1:i+self.cfg.block_size+1] for i in ix]).to(self.cfg.device)
+
+
             logits = self(x)
             optimiser.zero_grad()
             loss = loss_func(
@@ -191,20 +196,19 @@ with open(path, 'r') as f:
 tokens = gpt3_tokenizer.encode(data)
 '''
 
+if __name__ == "__main__":
+    
+    cfg = Config()
+    tokens = np.memmap('train.bin', dtype=np.uint16, mode="r")
+    tokens = torch.from_numpy(tokens.astype(np.int64))
 
-cfg = Config()
-
-tokens = np.memmap('train.bin', dtype=np.uint16, mode="r")
-tokens = torch.from_numpy(tokens.astype(np.int64))
-
-# A: We start by selecting batch_size batches of block_size tokens. We then stack these into a matrix (Forming a batch_size x block_size matrix)
-ix = torch.randint(0, len(tokens) - cfg.block_size, (cfg.batch_size,))
-x = torch.stack([tokens[i:i+cfg.block_size] for i in ix])
-y = torch.stack([tokens[i+1:i+cfg.block_size+1] for i in ix])
+    # A: We start by selecting batch_size batches of block_size tokens. We then stack these into a matrix (Forming a batch_size x block_size matrix)
 
 
-model = Model(cfg).to(cfg.device)
-model.train_time(x.to(cfg.device),y.to(cfg.device))
+
+    model = Model(cfg).to(cfg.device)
+    model.train_time(tokens)
+    torch.save(model.state_dict(), "michaelAI-5k-checkout.pt")
 
 '''
 import json

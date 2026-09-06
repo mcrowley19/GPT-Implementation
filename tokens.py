@@ -3,8 +3,11 @@ from datasets import load_dataset
 
 ds = load_dataset("hemantvirmani/gpt-training-dataset", split="train")
 text = "\n".join(ds["text"])
+from collections import Counter
 
+counts = Counter(text)
 
+print(text[100000:100100])
 
 chars = sorted(set(text))
 
