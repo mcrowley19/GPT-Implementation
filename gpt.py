@@ -77,18 +77,18 @@ class MultiHeadAttention(torch.nn.Module):
 class MLP(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.W_e = torch.nn.Parameter(torch.rand(cfg.d_model, 4 * cfg.d_model))
-        self.W_u = torch.nn.Parameter(torch.rand(4 * cfg.d_model, cfg.d_model))
+        self.W_e = torch.nn.Parameter(torch.rand(cfg.d_model, 4 * cfg.d_model) * 0.02)
+        self.W_u = torch.nn.Parameter(torch.rand(4 * cfg.d_model, cfg.d_model) * 0.02)
         self.cfg = cfg
         self.layer_norm = torch.nn.LayerNorm(self.cfg.d_model, device=cfg.device)
         self.gelu = torch.nn.GELU()
 
     def forward(self,resid):
         resid_norm = self.layer_norm(resid)
-        emb = einops.einsum(self.W_e, resid_norm, 'context d_mlp, batch tok_len d_model-> batch tok_len d_mlp')
+        emb = einops.einsum(self.W_e, resid_norm, 'd_model d_mlp, batch tok_len d_model-> batch tok_len d_mlp')
         # now we convert x to have dimensions batch embedding d_mlp
         activation = self.gelu(emb)
-        unemb =  einops.einsum(self.W_u, activation,  'embedding d_model, batch tok_len d_mlp -> batch tok_len d_model')
+        unemb =  einops.einsum(self.W_u, activation,  'd_mlp d_model, batch tok_len d_mlp -> batch tok_len d_model')
          
         return unemb
 

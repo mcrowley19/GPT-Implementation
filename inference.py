@@ -21,9 +21,9 @@ token_tensor = torch.cat(tokens,dim=0)
 softmax = torch.nn.Softmax(dim=-1)
 for iteration in range(context - len(input_str)):
     logits = model(token_tensor.unsqueeze(0).to(cfg.device))
-    logits = softmax(logits)
-    logit_indices = torch.argmax(logits[0, -1])
-    token_tensor = torch.cat([token_tensor, torch.tensor([logit_indices])], dim=-1)
+    probs = torch.softmax(logits[0, -1], dim=-1)
+    next_token = torch.multinomial(probs, num_samples=1)
+    token_tensor = torch.cat([token_tensor, torch.tensor([next_token])], dim=-1)
 
 
 out_str = ''
