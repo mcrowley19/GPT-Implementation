@@ -10,6 +10,8 @@ gpt3-tokenizer = "*"
 datasets = "*"
 einops = "*"
 tqdm = "*"
+transformer-lens = "*"
+matplotlib = "*"
 
 [dev-packages]
 

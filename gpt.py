@@ -5,7 +5,7 @@ import einops
 from huggingface_hub import hf_hub_download
 from tqdm import tqdm
 import time
-
+import matplotlib.pyplot as plt
 
 class Config:
     def __init__(self):
@@ -40,9 +40,9 @@ class Head(torch.nn.Module):
         This means that the output of the attention head is of shape (batch, block_size, dhead)
         '''
         
-        keys = einops.einsum(self.W_K, tokens, 'modeldim dhead, batch new_tokens embedding -> batch new_tokens dhead') + self.b_k
-        queries = einops.einsum(self.W_Q, tokens, 'modeldim dhead, batch tokens embedding -> batch tokens dhead') + self.b_q
-        values = einops.einsum(self.W_V, tokens,'modeldim dhead, batch new_tokens embedding -> batch new_tokens dhead') + self.b_v
+        keys = einops.einsum(self.W_K, tokens, 'd_model dhead, batch new_tokens d_model -> batch new_tokens dhead') + self.b_k
+        queries = einops.einsum(self.W_Q, tokens, 'd_model dhead, batch tokens d_model -> batch tokens dhead') + self.b_q
+        values = einops.einsum(self.W_V, tokens,'d_model dhead, batch new_tokens d_model -> batch new_tokens dhead') + self.b_v
 
         if cache:
             if self.k_cache is not None:
@@ -161,15 +161,18 @@ class Model(torch.nn.Module):
         return logits
 
     def train_time(self, tokens):
-        optimiser = torch.optim.AdamW(self.parameters(), lr= 1e-4)
+        optimiser = torch.optim.AdamW(self.parameters(), lr= 6e-4)
         loss_func = torch.nn.CrossEntropyLoss()
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimiser, start_factor=1/6, end_factor=1.0, total_iters=200
+        )
         losses = []
         steps = []
         for step in tqdm(range(self.cfg.train_steps)):
             ix = torch.randint(0, len(tokens) - self.cfg.block_size, (self.cfg.batch_size,))
             x = torch.stack([tokens[i:i+self.cfg.block_size] for i in ix]).to(self.cfg.device)
             y = torch.stack([tokens[i+1:i+self.cfg.block_size+1] for i in ix]).to(self.cfg.device)
-
+            
 
             logits = self(x, cache=False)
             optimiser.zero_grad()
@@ -182,8 +185,12 @@ class Model(torch.nn.Module):
                 losses.append(loss.item())
                 steps.append(step)
                 print(f"Step {step} Loss: {loss.item()}")
+            if step % 1000 == 0:
+                torch.save(self.state_dict(), "michaelAI-5k-checkout.pt")
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
             optimiser.step()
+            scheduler.step()
             
             '''
             print("Post Forward: ",t1 - start)
@@ -193,30 +200,12 @@ class Model(torch.nn.Module):
             '''
 
         print(loss.item())
-        import matplotlib.pyplot as plt
+ 
         plot = plt.plot(losses,steps)
-        plot.set(xlabel='steps', ylabel='loss')
+        plot.xlabel('steps')
+        plot.ylabel('loss')
         plot.show()
 
-
-        
-
-
-''''
-My code for tokenizing. Got rid of it because it is faster to import pre-tokenized data
-
-path = hf_hub_download(
-    repo_id="hemantvirmani/gpt-training-dataset",
-    filename="dataset.txt",
-    repo_type="dataset"
-)
-
-with open(path, 'r') as f:
-    data = f.read()
-
-
-tokens = gpt3_tokenizer.encode(data)
-'''
 
 if __name__ == "__main__":
     
@@ -231,26 +220,4 @@ if __name__ == "__main__":
     model = Model(cfg).to(cfg.device)
     model.train_time(tokens)
     torch.save(model.state_dict(), "michaelAI-5k-checkout.pt")
-
-'''
-import json
-with open('vocab.json','r') as f:
-    data = f.read()
-    data = json.loads(data)
-
-for token in out:
-    print(data[token])
-'''
-
-
-
-
-
-
-   
-# Next to add:
-#   - Training Loop
-#   - Beam Search
-#   - KV cache
-#   - Custom tokenizer
 

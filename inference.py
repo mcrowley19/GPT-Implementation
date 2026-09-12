@@ -13,7 +13,7 @@ with open('vocab.json','r') as f:
 
 
 context = 512
-input_str = "Criterion Collection Laserdisc in North America , and re- released in 1992 as "
+input_str = "My name is Michael "
 with torch.no_grad():
     tokens = [torch.tensor([data.index(char)]) for char in input_str]
     token_tensor = torch.cat(tokens,dim=0).to(cfg.device)
