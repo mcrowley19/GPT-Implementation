@@ -25,11 +25,20 @@ with torch.no_grad():
     next_token = torch.multinomial(probs, num_samples=1)
     output = token_tensor
     output = torch.cat([output, next_token], dim=-1)
-
+    p_val = 90
     for iteration in range(context - len(input_str)):
         logits = model(next_token.unsqueeze(0).to(cfg.device), cache = True)
         probs = torch.softmax(logits[0, -1], dim=-1)
-        next_token = torch.multinomial(probs, num_samples=1)
+
+
+        sorted_logits, indices = torch.sort(probs, descending=True)
+        cumulative_probs = torch.cumsum(sorted_logits, dim=-1)
+
+        below_treshold = (cumulative_probs - sorted_logits) < p_val
+        below_treshold = sorted_logits[below_treshold]
+        next_token_index = torch.multinomial(below_treshold, num_samples=1)
+
+        next_token = indices[next_token_index]
         output = torch.cat([output, next_token], dim=-1)
 
 
